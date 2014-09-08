@@ -1,0 +1,14 @@
+/.DS_Store
+/.coverage
+/.tox
+/.venv
+/AUTHORS
+/ChangeLog
+/build
+/cov_html
+/dist
+*.egg-info
+*.log
+*.pyc
+*.swp
+*.whl
