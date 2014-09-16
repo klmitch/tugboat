@@ -18,6 +18,7 @@ from __future__ import print_function
 import argparse
 import datetime
 import getpass
+import io
 import os
 import sys
 
@@ -25,6 +26,64 @@ import cli_tools
 import github
 
 from tugboat import pulls
+
+
+class PullSummary(object):
+    """
+    A helper class to maintain certain summary information about pull
+    requests.  It keeps track of the oldest and youngest pull
+    requests, and those with the oldest and most recent update times.
+    """
+
+    def __init__(self):
+        """
+        Initialize a ``PullSummary`` object.
+        """
+
+        self.oldest = None
+        self.youngest = None
+        self.least_recent = None
+        self.most_recent = None
+
+    def add_pull(self, pull):
+        """
+        Add a pull request to the summary information.
+
+        :param pull: The pull request to add.
+        """
+
+        # Is it older?
+        if self.oldest is None or self.oldest.created_at > pull.created_at:
+            self.oldest = pull
+
+        # How about younger?
+        if self.youngest is None or self.youngest.created_at < pull.created_at:
+            self.youngest = pull
+
+        # How about least recently updated?
+        if (self.least_recent is None or
+                self.least_recent.updated_at > pull.updated_at):
+            self.least_recent = pull
+
+        # How about most recently updated?
+        if (self.most_recent is None or
+                self.most_recent.updated_at < pull.updated_at):
+            self.most_recent = pull
+
+    def add_pulls(self, pulls):
+        """
+        Add a list of pull requests to the summary information.
+
+        :param pulls: The pull requests to add.
+
+        :returns: The original list of pull requests, for convenience.
+        """
+
+        for pull in pulls:
+            self.add_pull(pull)
+
+        # Convenience return
+        return pulls
 
 
 class RepoSummary(object):
@@ -62,6 +121,34 @@ class RepoSummary(object):
             self.mergeable += 1
 
         return self
+
+
+td_zero = datetime.timedelta(0)
+
+
+def format_age(now, time, fmt):
+    """
+    Format an age safely.  If the age is less than 0, an empty string
+    will be returned.
+
+    :param now: The current time, as a ``datetime.datetime`` object.
+    :param time: The time to be converted into an age, as a
+                 ``datetime.datetime`` object.
+    :param fmt: A format string designating how the age should be
+                formatted.  A "%s" will be replaced with the age.
+
+    :returns: The age, formatted as a string.
+    """
+
+    # Compute the age
+    age = now - time
+
+    # If it's less than zero, it has no age, so return an empty string
+    if age <= td_zero:
+        return ''
+
+    # Format and return the age
+    return fmt % age
 
 
 # This maps the target name used in an argument declaration to the
@@ -117,6 +204,14 @@ class RepoAction(argparse.Action):
         items = getattr(namespace, self.dest, [])
         items.append((self.target, values))
         setattr(namespace, self.dest, items)
+
+
+# Key routines for accomplishing the PR sort
+sort_keys = {
+    'created': lambda x: x.created_at,
+    'updated': lambda x: x.updated_at,
+    'repo': lambda x: (x.repo.full_name, x.number),
+}
 
 
 @cli_tools.argument_group(
@@ -177,6 +272,36 @@ class RepoAction(argparse.Action):
     group='repo',
     target='organization',
 )
+@cli_tools.mutually_exclusive_group(
+    'sorting',
+)
+@cli_tools.argument(
+    '--created', '-c',
+    dest='sort_by',
+    action='store_const',
+    default='created',
+    const='created',
+    help='Request that pull requests be sorted by their creation time.  '
+    'This is the default.',
+    group='sorting',
+)
+@cli_tools.argument(
+    '--updated', '-P',
+    dest='sort_by',
+    action='store_const',
+    const='updated',
+    help='Request that pull requests be sorted by their last updated time.',
+    group='sorting',
+)
+@cli_tools.argument(
+    '--alpha', '--alphabetically', '-a',
+    dest='sort_by',
+    action='store_const',
+    const='repo',
+    help='Request that pull requests be sorted alphabetically by the '
+    'repository and pull request number.',
+    group='sorting',
+)
 @cli_tools.argument(
     '--output', '-O',
     default='-',
@@ -206,7 +331,8 @@ class RepoAction(argparse.Action):
     help='Enable debugging mode.  If errors occur, a more detailed output '
     'will be emitted.  This does not affect verbosity.'
 )
-def report(gh, repos, stream=sys.stdout, repo_callback=None):
+def report(gh, repos, stream=sys.stdout, repo_callback=None,
+           sort_by='created'):
     """
     Generate a report of all open pull requests on the specified
     repositories (see the "--repo", "--user", and "--org" options for
@@ -233,11 +359,17 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None):
                           will be made after retrieving the list of
                           pull requests, and will include that list as
                           the fourth argument.
+    :param sort_by: Controls how pull requests are sorted.  This may
+                    be "created", to indicate sorting by creation
+                    time; "updated", to indicate sorting by update
+                    time; or "repo", to indicate sorting by repository
+                    name and pull request number.
     """
 
-    start = datetime.datetime.now()
+    start = datetime.datetime.utcnow()
 
     # Build the list of pull requests
+    pr_summary = PullSummary()
     pulls = []
     for target, name in repos:
         # Emit some status information
@@ -247,10 +379,12 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None):
 
         repo_pulls = targets[target](gh, name, repo_callback)
 
-        pulls.extend(repo_pulls)
+        # This uses the convenience return of add_pulls()
+        pulls.extend(pr_summary.add_pulls(repo_pulls))
 
     # Now we need to sort the list of pulls...
-    pulls.sort(key=lambda x: x.updated_at)
+    if sort_by in sort_keys:
+        pulls.sort(key=sort_keys[sort_by])
 
     # Emit one last piece of status information
     if repo_callback:
@@ -262,9 +396,23 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None):
         return
 
     # Emit a summary
-    print(u"Open PRs: %d (%d mergeable); oldest last updated %s" %
-          (len(pulls), sum(1 for pull in pulls if pull.mergeable),
-           pulls[0].updated_at), file=stream)
+    print(u"Open PRs: %d (%d mergeable)" %
+          (len(pulls), sum(1 for pull in pulls if pull.mergeable)),
+          file=stream)
+    print(u"    Oldest PR, from %s: %s#%d" %
+          (pr_summary.oldest.created_at, pr_summary.oldest.repo.full_name,
+           pr_summary.oldest.number), file=stream)
+    print(u"    Youngest PR, from %s: %s#%d" %
+          (pr_summary.youngest.created_at, pr_summary.youngest.repo.full_name,
+           pr_summary.youngest.number), file=stream)
+    print(u"    Least recently updated PR, at %s: %s#%d" %
+          (pr_summary.least_recent.updated_at,
+           pr_summary.least_recent.repo.full_name,
+           pr_summary.least_recent.number), file=stream)
+    print(u"    Most recently updated PR, at %s: %s#%d" %
+          (pr_summary.most_recent.updated_at,
+           pr_summary.most_recent.repo.full_name,
+           pr_summary.most_recent.number), file=stream)
 
     # Generate the report of pulls
     repos = {}
@@ -273,13 +421,16 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None):
               u"Pull request {pull.repo.full_name}#{pull.number}:\n"
               u"    URL: {pull.html_url}\n"
               u"    Merge {pull.head.label} -> {pull.base.label}\n"
-              u"    Proposed {pull.created_at} by {username} "
-              u"({pull.user.login})\n"
-              u"    Last updated: {pull.updated_at}\n"
+              u"    Proposed {pull.created_at}{age}\n"
+              u"    Proposed by {username} ({pull.user.login})\n"
+              u"    Last updated: {pull.updated_at}{update}\n"
               u"    Mergeable: {mergeable}".format(
                   pull=pull,
                   mergeable=('yes' if pull.mergeable else 'no'),
-                  username=(pull.user.name or '<unknown>')).encode('utf-8'),
+                  username=(pull.user.name or '<unknown>'),
+                  age=format_age(start, pull.created_at, ' (age: %s)'),
+                  update=format_age(start, pull.updated_at, ' (%s ago)'),
+              ),
               file=stream)
 
         # Add repository breakdown data
@@ -287,19 +438,17 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None):
         repos[pull.repo.full_name] += pull
 
     # Generate the repository breakdown
-    print((u"\nRepositories with open pull requests: %d\n"
-          "Breakdown by repository:" % len(repos)).encode('utf-8'),
+    print(u"\nRepositories with open pull requests: %d\n"
+          u"Breakdown by repository:" % len(repos),
           file=stream)
     for summary in sorted(repos.values(), key=lambda x: x.name):
-        print((u"    Open PRs for %s: %d (%d mergeable)" %
-               (summary.name, summary.pulls,
-                summary.mergeable)).encode('utf-8'),
+        print(u"    Open PRs for %s: %d (%d mergeable)" %
+              (summary.name, summary.pulls, summary.mergeable),
               file=stream)
 
     # Emit the time data
-    end = datetime.datetime.now()
-    print((u"\nReport generated in %s at %s" %
-           (end - start, start)).encode('utf-8'),
+    end = datetime.datetime.utcnow()
+    print(u"\nReport generated in %s at %s" % (end - start, start),
           file=stream)
 
 
@@ -384,7 +533,7 @@ def _process_report(args):
         args.stream = sys.stdout
         close = False
     else:
-        args.stream = open(args.output, 'w')
+        args.stream = io.open(args.output, 'w', encoding='utf-8')
         close = True
 
     # Select the correct verbosity

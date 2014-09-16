@@ -13,6 +13,7 @@
 #    express or implied. See the License for the specific language
 #    governing permissions and limitations under the License.
 
+import datetime
 import sys
 import unittest
 
@@ -21,6 +22,105 @@ import six
 from six.moves import builtins
 
 from tugboat import reports
+
+
+class PullSummaryTest(unittest.TestCase):
+    def test_init(self):
+        result = reports.PullSummary()
+
+        self.assertEqual(result.oldest, None)
+        self.assertEqual(result.youngest, None)
+        self.assertEqual(result.least_recent, None)
+        self.assertEqual(result.most_recent, None)
+
+    def test_add_unset(self):
+        pull = mock.Mock(created_at=5, updated_at=5)
+        summary = reports.PullSummary()
+
+        summary.add_pull(pull)
+
+        self.assertEqual(summary.oldest, pull)
+        self.assertEqual(summary.youngest, pull)
+        self.assertEqual(summary.least_recent, pull)
+        self.assertEqual(summary.most_recent, pull)
+
+    def test_add_older(self):
+        pull = mock.Mock(created_at=5, updated_at=5)
+        other = mock.Mock(created_at=4, updated_at=5)
+        summary = reports.PullSummary()
+        summary.oldest = pull
+        summary.youngest = pull
+        summary.least_recent = pull
+        summary.most_recent = pull
+
+        summary.add_pull(other)
+
+        self.assertEqual(summary.oldest, other)
+        self.assertEqual(summary.youngest, pull)
+        self.assertEqual(summary.least_recent, pull)
+        self.assertEqual(summary.most_recent, pull)
+
+    def test_add_younger(self):
+        pull = mock.Mock(created_at=5, updated_at=5)
+        other = mock.Mock(created_at=6, updated_at=5)
+        summary = reports.PullSummary()
+        summary.oldest = pull
+        summary.youngest = pull
+        summary.least_recent = pull
+        summary.most_recent = pull
+
+        summary.add_pull(other)
+
+        self.assertEqual(summary.oldest, pull)
+        self.assertEqual(summary.youngest, other)
+        self.assertEqual(summary.least_recent, pull)
+        self.assertEqual(summary.most_recent, pull)
+
+    def test_add_less_recent(self):
+        pull = mock.Mock(created_at=5, updated_at=5)
+        other = mock.Mock(created_at=5, updated_at=4)
+        summary = reports.PullSummary()
+        summary.oldest = pull
+        summary.youngest = pull
+        summary.least_recent = pull
+        summary.most_recent = pull
+
+        summary.add_pull(other)
+
+        self.assertEqual(summary.oldest, pull)
+        self.assertEqual(summary.youngest, pull)
+        self.assertEqual(summary.least_recent, other)
+        self.assertEqual(summary.most_recent, pull)
+
+    def test_add_more_recent(self):
+        pull = mock.Mock(created_at=5, updated_at=5)
+        other = mock.Mock(created_at=5, updated_at=6)
+        summary = reports.PullSummary()
+        summary.oldest = pull
+        summary.youngest = pull
+        summary.least_recent = pull
+        summary.most_recent = pull
+
+        summary.add_pull(other)
+
+        self.assertEqual(summary.oldest, pull)
+        self.assertEqual(summary.youngest, pull)
+        self.assertEqual(summary.least_recent, pull)
+        self.assertEqual(summary.most_recent, other)
+
+    @mock.patch.object(reports.PullSummary, 'add_pull')
+    def test_add_pulls(self, mock_add_pull):
+        summary = reports.PullSummary()
+
+        result = summary.add_pulls(['pr1', 'pr2', 'pr3'])
+
+        self.assertEqual(result, ['pr1', 'pr2', 'pr3'])
+        mock_add_pull.assert_has_calls([
+            mock.call('pr1'),
+            mock.call('pr2'),
+            mock.call('pr3'),
+        ])
+        self.assertEqual(mock_add_pull.call_count, 3)
 
 
 class RepoSummaryTest(unittest.TestCase):
@@ -48,6 +148,32 @@ class RepoSummaryTest(unittest.TestCase):
 
         self.assertEqual(summary.pulls, 1)
         self.assertEqual(summary.mergeable, 1)
+
+
+class FormatAgeTest(unittest.TestCase):
+    def test_normal(self):
+        now = datetime.datetime(2000, 1, 1, 0, 0, 0)
+        time = datetime.datetime(1999, 12, 31, 0, 0, 0)
+
+        result = reports.format_age(now, time, "<%s>")
+
+        self.assertEqual(result, '<1 day, 0:00:00>')
+
+    def test_equal(self):
+        now = datetime.datetime(2000, 1, 1, 0, 0, 0)
+        time = datetime.datetime(2000, 1, 1, 0, 0, 0)
+
+        result = reports.format_age(now, time, "<%s>")
+
+        self.assertEqual(result, '')
+
+    def test_negative(self):
+        now = datetime.datetime(2000, 1, 1, 0, 0, 0)
+        time = datetime.datetime(2000, 1, 2, 0, 0, 0)
+
+        result = reports.format_age(now, time, "<%s>")
+
+        self.assertEqual(result, '')
 
 
 class RepoActionTest(unittest.TestCase):
@@ -78,14 +204,41 @@ class RepoActionTest(unittest.TestCase):
         self.assertEqual(namespace.dest, [('user', 'spam'), ('user', 'foo')])
 
 
+class SortKeysTest(unittest.TestCase):
+    def test_created(self):
+        pull = mock.Mock(created_at=5)
+
+        result = reports.sort_keys['created'](pull)
+
+        self.assertEqual(result, 5)
+
+    def test_updated(self):
+        pull = mock.Mock(updated_at=5)
+
+        result = reports.sort_keys['updated'](pull)
+
+        self.assertEqual(result, 5)
+
+    def test_repo(self):
+        pull = mock.Mock(**{'repo.full_name': 'some/repo', 'number': 5})
+
+        result = reports.sort_keys['repo'](pull)
+
+        self.assertEqual(result, ('some/repo', 5))
+
+
 class ReportTest(unittest.TestCase):
-    @mock.patch('datetime.datetime', mock.Mock(now=mock.Mock(side_effect=[
-        1234567,
-        1234569,
+    maxDiff = None
+
+    @mock.patch('datetime.datetime', mock.Mock(utcnow=mock.Mock(side_effect=[
+        80,
+        82,
     ])))
     @mock.patch.dict(reports.targets, clear=True)
     @mock.patch.object(sys, 'stderr', six.StringIO())
-    def test_basic(self):
+    @mock.patch.object(reports, 'format_age',
+                       side_effect=lambda x, y, z: z % (x - y))
+    def test_basic(self, mock_format_age):
         prs = {
             'repo1#1': mock.Mock(**{
                 'user.name': None,
@@ -168,7 +321,7 @@ class ReportTest(unittest.TestCase):
         ]
         stream = six.StringIO()
 
-        reports.report('gh', repos, stream, None)
+        reports.report('gh', repos, stream, None, 'updated')
 
         reports.targets['repo'].assert_has_calls([
             mock.call('gh', 'repo1', None),
@@ -187,69 +340,82 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(reports.targets['organization'].call_count, 2)
         self.assertEqual(
             stream.getvalue(),
-            'Open PRs: 9 (7 mergeable); oldest last updated 10\n'
+            'Open PRs: 9 (7 mergeable)\n'
+            '    Oldest PR, from 10: repo1#1\n'
+            '    Youngest PR, from 90: repo8#1\n'
+            '    Least recently updated PR, at 10: repo8#1\n'
+            '    Most recently updated PR, at 90: repo1#1\n'
             '\n'
             'Pull request repo8#1:\n'
             '    URL: https://github/repo8/pull/1\n'
             '    Merge me:branch -> repo8:master\n'
-            '    Proposed 90 by spam (me)\n'
-            '    Last updated: 10\n'
+            '    Proposed 90 (age: -10)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 10 (70 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo7#1:\n'
             '    URL: https://github/repo7/pull/1\n'
             '    Merge me:branch -> repo7:master\n'
-            '    Proposed 80 by spam (me)\n'
-            '    Last updated: 20\n'
+            '    Proposed 80 (age: 0)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 20 (60 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo6#1:\n'
             '    URL: https://github/repo6/pull/1\n'
             '    Merge me:branch -> repo6:master\n'
-            '    Proposed 70 by spam (me)\n'
-            '    Last updated: 30\n'
+            '    Proposed 70 (age: 10)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 30 (50 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo5#1:\n'
             '    URL: https://github/repo5/pull/1\n'
             '    Merge me:branch -> repo5:master\n'
-            '    Proposed 60 by <unknown> (me)\n'
-            '    Last updated: 40\n'
+            '    Proposed 60 (age: 20)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 40 (40 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo4#1:\n'
             '    URL: https://github/repo4/pull/1\n'
             '    Merge me:branch -> repo4:master\n'
-            '    Proposed 50 by <unknown> (me)\n'
-            '    Last updated: 50\n'
+            '    Proposed 50 (age: 30)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 50 (30 ago)\n'
             '    Mergeable: no\n'
             '\n'
             'Pull request repo3#1:\n'
             '    URL: https://github/repo3/pull/1\n'
             '    Merge me:branch -> repo3:master\n'
-            '    Proposed 40 by <unknown> (me)\n'
-            '    Last updated: 60\n'
+            '    Proposed 40 (age: 40)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 60 (20 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo2#1:\n'
             '    URL: https://github/repo2/pull/1\n'
             '    Merge me:branch -> repo2:master\n'
-            '    Proposed 30 by spam (me)\n'
-            '    Last updated: 70\n'
+            '    Proposed 30 (age: 50)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 70 (10 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo1#2:\n'
             '    URL: https://github/repo1/pull/2\n'
             '    Merge me:branch -> repo1:master\n'
-            '    Proposed 20 by <unknown> (me)\n'
-            '    Last updated: 80\n'
+            '    Proposed 20 (age: 60)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 80 (0 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo1#1:\n'
             '    URL: https://github/repo1/pull/1\n'
             '    Merge me:branch -> repo1:master\n'
-            '    Proposed 10 by <unknown> (me)\n'
-            '    Last updated: 90\n'
+            '    Proposed 10 (age: 70)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 90 (-10 ago)\n'
             '    Mergeable: no\n'
             '\n'
             'Repositories with open pull requests: 8\n'
@@ -263,17 +429,40 @@ class ReportTest(unittest.TestCase):
             '    Open PRs for repo7: 1 (1 mergeable)\n'
             '    Open PRs for repo8: 1 (1 mergeable)\n'
             '\n'
-            'Report generated in 2 at 1234567\n'
+            'Report generated in 2 at 80\n'
         )
         self.assertEqual(sys.stderr.getvalue(), '')
+        mock_format_age.assert_has_calls([
+            mock.call(80, 90, ' (age: %s)'),
+            mock.call(80, 10, ' (%s ago)'),
+            mock.call(80, 80, ' (age: %s)'),
+            mock.call(80, 20, ' (%s ago)'),
+            mock.call(80, 70, ' (age: %s)'),
+            mock.call(80, 30, ' (%s ago)'),
+            mock.call(80, 60, ' (age: %s)'),
+            mock.call(80, 40, ' (%s ago)'),
+            mock.call(80, 50, ' (age: %s)'),
+            mock.call(80, 50, ' (%s ago)'),
+            mock.call(80, 40, ' (age: %s)'),
+            mock.call(80, 60, ' (%s ago)'),
+            mock.call(80, 30, ' (age: %s)'),
+            mock.call(80, 70, ' (%s ago)'),
+            mock.call(80, 20, ' (age: %s)'),
+            mock.call(80, 80, ' (%s ago)'),
+            mock.call(80, 10, ' (age: %s)'),
+            mock.call(80, 90, ' (%s ago)'),
+        ])
+        self.assertEqual(mock_format_age.call_count, 18)
 
-    @mock.patch('datetime.datetime', mock.Mock(now=mock.Mock(side_effect=[
-        1234567,
-        1234569,
+    @mock.patch('datetime.datetime', mock.Mock(utcnow=mock.Mock(side_effect=[
+        80,
+        82,
     ])))
     @mock.patch.dict(reports.targets, clear=True)
     @mock.patch.object(sys, 'stderr', six.StringIO())
-    def test_callback(self):
+    @mock.patch.object(reports, 'format_age',
+                       side_effect=lambda x, y, z: z % (x - y))
+    def test_callback(self, mock_format_age):
         prs = {
             'repo1#1': mock.Mock(**{
                 'user.name': None,
@@ -340,11 +529,14 @@ class ReportTest(unittest.TestCase):
             pr.user.login = 'me'
         reports.targets = {
             'repo': mock.Mock(side_effect=lambda x, y, z: [
-                pr for n, pr in prs.items() if n.startswith('%s#' % y)]),
+                pr for n, pr in sorted(prs.items(), key=lambda x: x[0])
+                if n.startswith('%s#' % y)]),
             'user': mock.Mock(side_effect=lambda x, y, z: [
-                pr for n, pr in prs.items() if n.startswith('%s:' % y)]),
+                pr for n, pr in sorted(prs.items(), key=lambda x: x[0])
+                if n.startswith('%s:' % y)]),
             'organization': mock.Mock(side_effect=lambda x, y, z: [
-                pr for n, pr in prs.items() if n.startswith('%s:' % y)]),
+                pr for n, pr in sorted(prs.items(), key=lambda x: x[0])
+                if n.startswith('%s:' % y)]),
         }
         repos = [
             ('repo', 'repo1'),
@@ -356,7 +548,7 @@ class ReportTest(unittest.TestCase):
         ]
         stream = six.StringIO()
 
-        reports.report('gh', repos, stream, 'callback')
+        reports.report('gh', repos, stream, 'callback', 'other')
 
         reports.targets['repo'].assert_has_calls([
             mock.call('gh', 'repo1', 'callback'),
@@ -375,70 +567,83 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(reports.targets['organization'].call_count, 2)
         self.assertEqual(
             stream.getvalue(),
-            'Open PRs: 9 (7 mergeable); oldest last updated 10\n'
+            'Open PRs: 9 (7 mergeable)\n'
+            '    Oldest PR, from 10: repo1#1\n'
+            '    Youngest PR, from 90: repo8#1\n'
+            '    Least recently updated PR, at 10: repo8#1\n'
+            '    Most recently updated PR, at 90: repo1#1\n'
             '\n'
-            'Pull request repo8#1:\n'
-            '    URL: https://github/repo8/pull/1\n'
-            '    Merge me:branch -> repo8:master\n'
-            '    Proposed 90 by spam (me)\n'
-            '    Last updated: 10\n'
+            'Pull request repo1#1:\n'
+            '    URL: https://github/repo1/pull/1\n'
+            '    Merge me:branch -> repo1:master\n'
+            '    Proposed 10 (age: 70)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 90 (-10 ago)\n'
+            '    Mergeable: no\n'
+            '\n'
+            'Pull request repo1#2:\n'
+            '    URL: https://github/repo1/pull/2\n'
+            '    Merge me:branch -> repo1:master\n'
+            '    Proposed 20 (age: 60)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 80 (0 ago)\n'
             '    Mergeable: yes\n'
             '\n'
-            'Pull request repo7#1:\n'
-            '    URL: https://github/repo7/pull/1\n'
-            '    Merge me:branch -> repo7:master\n'
-            '    Proposed 80 by spam (me)\n'
-            '    Last updated: 20\n'
-            '    Mergeable: yes\n'
-            '\n'
-            'Pull request repo6#1:\n'
-            '    URL: https://github/repo6/pull/1\n'
-            '    Merge me:branch -> repo6:master\n'
-            '    Proposed 70 by spam (me)\n'
-            '    Last updated: 30\n'
-            '    Mergeable: yes\n'
-            '\n'
-            'Pull request repo5#1:\n'
-            '    URL: https://github/repo5/pull/1\n'
-            '    Merge me:branch -> repo5:master\n'
-            '    Proposed 60 by <unknown> (me)\n'
-            '    Last updated: 40\n'
+            'Pull request repo3#1:\n'
+            '    URL: https://github/repo3/pull/1\n'
+            '    Merge me:branch -> repo3:master\n'
+            '    Proposed 40 (age: 40)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 60 (20 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo4#1:\n'
             '    URL: https://github/repo4/pull/1\n'
             '    Merge me:branch -> repo4:master\n'
-            '    Proposed 50 by <unknown> (me)\n'
-            '    Last updated: 50\n'
+            '    Proposed 50 (age: 30)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 50 (30 ago)\n'
             '    Mergeable: no\n'
             '\n'
-            'Pull request repo3#1:\n'
-            '    URL: https://github/repo3/pull/1\n'
-            '    Merge me:branch -> repo3:master\n'
-            '    Proposed 40 by <unknown> (me)\n'
-            '    Last updated: 60\n'
+            'Pull request repo6#1:\n'
+            '    URL: https://github/repo6/pull/1\n'
+            '    Merge me:branch -> repo6:master\n'
+            '    Proposed 70 (age: 10)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 30 (50 ago)\n'
+            '    Mergeable: yes\n'
+            '\n'
+            'Pull request repo7#1:\n'
+            '    URL: https://github/repo7/pull/1\n'
+            '    Merge me:branch -> repo7:master\n'
+            '    Proposed 80 (age: 0)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 20 (60 ago)\n'
             '    Mergeable: yes\n'
             '\n'
             'Pull request repo2#1:\n'
             '    URL: https://github/repo2/pull/1\n'
             '    Merge me:branch -> repo2:master\n'
-            '    Proposed 30 by spam (me)\n'
-            '    Last updated: 70\n'
+            '    Proposed 30 (age: 50)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 70 (10 ago)\n'
             '    Mergeable: yes\n'
             '\n'
-            'Pull request repo1#2:\n'
-            '    URL: https://github/repo1/pull/2\n'
-            '    Merge me:branch -> repo1:master\n'
-            '    Proposed 20 by <unknown> (me)\n'
-            '    Last updated: 80\n'
+            'Pull request repo5#1:\n'
+            '    URL: https://github/repo5/pull/1\n'
+            '    Merge me:branch -> repo5:master\n'
+            '    Proposed 60 (age: 20)\n'
+            '    Proposed by <unknown> (me)\n'
+            '    Last updated: 40 (40 ago)\n'
             '    Mergeable: yes\n'
             '\n'
-            'Pull request repo1#1:\n'
-            '    URL: https://github/repo1/pull/1\n'
-            '    Merge me:branch -> repo1:master\n'
-            '    Proposed 10 by <unknown> (me)\n'
-            '    Last updated: 90\n'
-            '    Mergeable: no\n'
+            'Pull request repo8#1:\n'
+            '    URL: https://github/repo8/pull/1\n'
+            '    Merge me:branch -> repo8:master\n'
+            '    Proposed 90 (age: -10)\n'
+            '    Proposed by spam (me)\n'
+            '    Last updated: 10 (70 ago)\n'
+            '    Mergeable: yes\n'
             '\n'
             'Repositories with open pull requests: 8\n'
             'Breakdown by repository:\n'
@@ -451,7 +656,7 @@ class ReportTest(unittest.TestCase):
             '    Open PRs for repo7: 1 (1 mergeable)\n'
             '    Open PRs for repo8: 1 (1 mergeable)\n'
             '\n'
-            'Report generated in 2 at 1234567\n'
+            'Report generated in 2 at 80\n'
         )
         self.assertEqual(sys.stderr.getvalue(),
                          'Looking up repo "repo1"...\n'
@@ -461,20 +666,44 @@ class ReportTest(unittest.TestCase):
                          'Looking up user "user2"...\n'
                          'Looking up organization "org2"...\n'
                          'Generating report...\n')
+        mock_format_age.assert_has_calls([
+            mock.call(80, 10, ' (age: %s)'),
+            mock.call(80, 90, ' (%s ago)'),
+            mock.call(80, 20, ' (age: %s)'),
+            mock.call(80, 80, ' (%s ago)'),
+            mock.call(80, 40, ' (age: %s)'),
+            mock.call(80, 60, ' (%s ago)'),
+            mock.call(80, 50, ' (age: %s)'),
+            mock.call(80, 50, ' (%s ago)'),
+            mock.call(80, 70, ' (age: %s)'),
+            mock.call(80, 30, ' (%s ago)'),
+            mock.call(80, 80, ' (age: %s)'),
+            mock.call(80, 20, ' (%s ago)'),
+            mock.call(80, 30, ' (age: %s)'),
+            mock.call(80, 70, ' (%s ago)'),
+            mock.call(80, 60, ' (age: %s)'),
+            mock.call(80, 40, ' (%s ago)'),
+            mock.call(80, 90, ' (age: %s)'),
+            mock.call(80, 10, ' (%s ago)'),
+        ])
+        self.assertEqual(mock_format_age.call_count, 18)
 
-    @mock.patch('datetime.datetime', mock.Mock(now=mock.Mock(side_effect=[
-        1234567,
-        1234569,
+    @mock.patch('datetime.datetime', mock.Mock(utcnow=mock.Mock(side_effect=[
+        80,
+        82,
     ])))
     @mock.patch.dict(reports.targets, clear=True)
     @mock.patch.object(sys, 'stderr', six.StringIO())
-    def test_empty(self):
+    @mock.patch.object(reports, 'format_age',
+                       side_effect=lambda x, y, z: z % (x - y))
+    def test_empty(self, mock_format_age):
         stream = six.StringIO()
 
         reports.report('gh', [], stream, 'callback')
 
         self.assertEqual(stream.getvalue(), 'No open pull requests\n')
         self.assertEqual(sys.stderr.getvalue(), 'Generating report...\n')
+        self.assertFalse(mock_format_age.called)
 
 
 class NormalCallbackTest(unittest.TestCase):
@@ -528,7 +757,7 @@ class VerboseCallbackTest(unittest.TestCase):
 class ProcessReportTest(unittest.TestCase):
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
-    @mock.patch.object(builtins, 'open')
+    @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
     def test_basic(self, mock_open, mock_Github, mock_getpass):
         args = mock.Mock(username='username', password='password',
@@ -558,7 +787,7 @@ class ProcessReportTest(unittest.TestCase):
 
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
-    @mock.patch.object(builtins, 'open')
+    @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
     def test_prompt(self, mock_open, mock_Github, mock_getpass):
         args = mock.Mock(username='username', password=None,
@@ -588,7 +817,7 @@ class ProcessReportTest(unittest.TestCase):
 
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
-    @mock.patch.object(builtins, 'open')
+    @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
     def test_output(self, mock_open, mock_Github, mock_getpass):
         args = mock.Mock(username='username', password='password',
@@ -604,7 +833,7 @@ class ProcessReportTest(unittest.TestCase):
         self.assertFalse(mock_getpass.called)
         mock_Github.assert_called_once_with(
             'username', 'password', 'github_url')
-        mock_open.assert_called_once_with('output', 'w')
+        mock_open.assert_called_once_with('output', 'w', encoding='utf-8')
         self.assertFalse(mock_open.return_value.close.called)
 
         try:
@@ -618,7 +847,7 @@ class ProcessReportTest(unittest.TestCase):
 
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
-    @mock.patch.object(builtins, 'open')
+    @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
     def test_verbosity_normal(self, mock_open, mock_Github, mock_getpass):
         args = mock.Mock(username='username', password='password',
@@ -648,7 +877,7 @@ class ProcessReportTest(unittest.TestCase):
 
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
-    @mock.patch.object(builtins, 'open')
+    @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
     def test_verbosity_verbose(self, mock_open, mock_Github, mock_getpass):
         args = mock.Mock(username='username', password='password',
