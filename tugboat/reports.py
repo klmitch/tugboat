@@ -536,6 +536,10 @@ def _process_report(args):
     :returns: A ``cli_tools`` processor generator.
     """
 
+    # Enable debugging output
+    if args.debug:
+        github.enable_console_debug_logging()
+
     # Get the user's password
     password = args.password
     if not password:

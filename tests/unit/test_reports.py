@@ -767,14 +767,16 @@ class VerboseCallbackTest(unittest.TestCase):
 
 
 class ProcessReportTest(unittest.TestCase):
+    @mock.patch('github.enable_console_debug_logging')
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
     @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
-    def test_basic(self, mock_open, mock_Github, mock_getpass):
+    def test_basic(self, mock_open, mock_Github, mock_getpass,
+                   mock_enable_console_debug_logging):
         args = mock.Mock(username='username', password='password',
                          github_url='github_url', output='-',
-                         verbose=0)
+                         verbose=0, debug=False)
 
         gen = reports._process_report(args)
         next(gen)
@@ -782,6 +784,7 @@ class ProcessReportTest(unittest.TestCase):
         self.assertEqual(args.gh, 'gh')
         self.assertEqual(args.stream, sys.stdout)
         self.assertEqual(args.repo_callback, None)
+        self.assertFalse(mock_enable_console_debug_logging.called)
         self.assertFalse(mock_getpass.called)
         mock_Github.assert_called_once_with(
             'username', 'password', 'github_url')
@@ -797,14 +800,16 @@ class ProcessReportTest(unittest.TestCase):
 
         self.assertFalse(sys.stdout.close.called)
 
+    @mock.patch('github.enable_console_debug_logging')
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
     @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
-    def test_prompt(self, mock_open, mock_Github, mock_getpass):
+    def test_prompt(self, mock_open, mock_Github, mock_getpass,
+                    mock_enable_console_debug_logging):
         args = mock.Mock(username='username', password=None,
                          github_url='github_url', output='-',
-                         verbose=0)
+                         verbose=0, debug=False)
 
         gen = reports._process_report(args)
         next(gen)
@@ -812,6 +817,7 @@ class ProcessReportTest(unittest.TestCase):
         self.assertEqual(args.gh, 'gh')
         self.assertEqual(args.stream, sys.stdout)
         self.assertEqual(args.repo_callback, None)
+        self.assertFalse(mock_enable_console_debug_logging.called)
         mock_getpass.assert_called_once_with('Password for username> ')
         mock_Github.assert_called_once_with(
             'username', 'prompted', 'github_url')
@@ -827,14 +833,16 @@ class ProcessReportTest(unittest.TestCase):
 
         self.assertFalse(sys.stdout.close.called)
 
+    @mock.patch('github.enable_console_debug_logging')
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
     @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
-    def test_output(self, mock_open, mock_Github, mock_getpass):
+    def test_output(self, mock_open, mock_Github, mock_getpass,
+                    mock_enable_console_debug_logging):
         args = mock.Mock(username='username', password='password',
                          github_url='github_url', output='output',
-                         verbose=0)
+                         verbose=0, debug=False)
 
         gen = reports._process_report(args)
         next(gen)
@@ -842,6 +850,7 @@ class ProcessReportTest(unittest.TestCase):
         self.assertEqual(args.gh, 'gh')
         self.assertEqual(args.stream, mock_open.return_value)
         self.assertEqual(args.repo_callback, None)
+        self.assertFalse(mock_enable_console_debug_logging.called)
         self.assertFalse(mock_getpass.called)
         mock_Github.assert_called_once_with(
             'username', 'password', 'github_url')
@@ -857,14 +866,16 @@ class ProcessReportTest(unittest.TestCase):
 
         mock_open.return_value.close.assert_called_once_with()
 
+    @mock.patch('github.enable_console_debug_logging')
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
     @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
-    def test_verbosity_normal(self, mock_open, mock_Github, mock_getpass):
+    def test_verbosity_normal(self, mock_open, mock_Github, mock_getpass,
+                              mock_enable_console_debug_logging):
         args = mock.Mock(username='username', password='password',
                          github_url='github_url', output='-',
-                         verbose=1)
+                         verbose=1, debug=False)
 
         gen = reports._process_report(args)
         next(gen)
@@ -872,6 +883,7 @@ class ProcessReportTest(unittest.TestCase):
         self.assertEqual(args.gh, 'gh')
         self.assertEqual(args.stream, sys.stdout)
         self.assertEqual(args.repo_callback, reports._normal_callback)
+        self.assertFalse(mock_enable_console_debug_logging.called)
         self.assertFalse(mock_getpass.called)
         mock_Github.assert_called_once_with(
             'username', 'password', 'github_url')
@@ -887,14 +899,16 @@ class ProcessReportTest(unittest.TestCase):
 
         self.assertFalse(sys.stdout.close.called)
 
+    @mock.patch('github.enable_console_debug_logging')
     @mock.patch('getpass.getpass', return_value='prompted')
     @mock.patch('github.Github', return_value='gh')
     @mock.patch('io.open')
     @mock.patch('sys.stdout', mock.Mock())
-    def test_verbosity_verbose(self, mock_open, mock_Github, mock_getpass):
+    def test_verbosity_verbose(self, mock_open, mock_Github, mock_getpass,
+                               mock_enable_console_debug_logging):
         args = mock.Mock(username='username', password='password',
                          github_url='github_url', output='-',
-                         verbose=2)
+                         verbose=2, debug=False)
 
         gen = reports._process_report(args)
         next(gen)
@@ -902,6 +916,40 @@ class ProcessReportTest(unittest.TestCase):
         self.assertEqual(args.gh, 'gh')
         self.assertEqual(args.stream, sys.stdout)
         self.assertEqual(args.repo_callback, reports._verbose_callback)
+        self.assertFalse(mock_enable_console_debug_logging.called)
+        self.assertFalse(mock_getpass.called)
+        mock_Github.assert_called_once_with(
+            'username', 'password', 'github_url')
+        self.assertFalse(mock_open.called)
+        self.assertFalse(sys.stdout.close.called)
+
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+        else:
+            self.fail('Failed to end iteration')
+
+        self.assertFalse(sys.stdout.close.called)
+
+    @mock.patch('github.enable_console_debug_logging')
+    @mock.patch('getpass.getpass', return_value='prompted')
+    @mock.patch('github.Github', return_value='gh')
+    @mock.patch('io.open')
+    @mock.patch('sys.stdout', mock.Mock())
+    def test_debug(self, mock_open, mock_Github, mock_getpass,
+                   mock_enable_console_debug_logging):
+        args = mock.Mock(username='username', password='password',
+                         github_url='github_url', output='-',
+                         verbose=0, debug=True)
+
+        gen = reports._process_report(args)
+        next(gen)
+
+        self.assertEqual(args.gh, 'gh')
+        self.assertEqual(args.stream, sys.stdout)
+        self.assertEqual(args.repo_callback, None)
+        mock_enable_console_debug_logging.assert_called_once_with()
         self.assertFalse(mock_getpass.called)
         mock_Github.assert_called_once_with(
             'username', 'password', 'github_url')
