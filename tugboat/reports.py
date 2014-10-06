@@ -366,6 +366,9 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None,
                     name and pull request number.
     """
 
+    # How verbose should we be?
+    verbose = (repo_callback and stream != sys.stdout)
+
     start = datetime.datetime.utcnow()
 
     # Build the list of pull requests
@@ -396,6 +399,10 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None,
         return
 
     # Emit a summary
+    if verbose:
+        print("Emitting summary: Open PRs: %d (%d mergeable)" %
+              (len(pulls), sum(1 for pull in pulls if pull.mergeable)),
+              file=sys.stderr)
     print(u"Open PRs: %d (%d mergeable)" %
           (len(pulls), sum(1 for pull in pulls if pull.mergeable)),
           file=stream)
@@ -417,6 +424,9 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None,
     # Generate the report of pulls
     repos = {}
     for pull in pulls:
+        if verbose:
+            print("Emitting pull request {pull.repo.full_name}"
+                  "#{pull.number}".format(pull=pull), file=sys.stderr)
         print(u"\n"
               u"Pull request {pull.repo.full_name}#{pull.number}:\n"
               u"    URL: {pull.html_url}\n"
@@ -438,6 +448,9 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None,
         repos[pull.repo.full_name] += pull
 
     # Generate the repository breakdown
+    if verbose:
+        print("Emitting repositories with open pull requests: %d" % len(repos),
+              file=sys.stderr)
     print(u"\nRepositories with open pull requests: %d\n"
           u"Breakdown by repository:" % len(repos),
           file=stream)
@@ -450,6 +463,9 @@ def report(gh, repos, stream=sys.stdout, repo_callback=None,
     end = datetime.datetime.utcnow()
     print(u"\nReport generated in %s at %s" % (end - start, start),
           file=stream)
+    if verbose:
+        print("Report generated in %s at %s" % (end - start, start),
+              file=sys.stderr)
 
 
 def _normal_callback(idx, count, repo, pulls=None):

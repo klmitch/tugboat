@@ -665,7 +665,19 @@ class ReportTest(unittest.TestCase):
                          'Looking up repo "repo2"...\n'
                          'Looking up user "user2"...\n'
                          'Looking up organization "org2"...\n'
-                         'Generating report...\n')
+                         'Generating report...\n'
+                         'Emitting summary: Open PRs: 9 (7 mergeable)\n'
+                         'Emitting pull request repo1#1\n'
+                         'Emitting pull request repo1#2\n'
+                         'Emitting pull request repo3#1\n'
+                         'Emitting pull request repo4#1\n'
+                         'Emitting pull request repo6#1\n'
+                         'Emitting pull request repo7#1\n'
+                         'Emitting pull request repo2#1\n'
+                         'Emitting pull request repo5#1\n'
+                         'Emitting pull request repo8#1\n'
+                         'Emitting repositories with open pull requests: 8\n'
+                         'Report generated in 2 at 80\n')
         mock_format_age.assert_has_calls([
             mock.call(80, 10, ' (age: %s)'),
             mock.call(80, 90, ' (%s ago)'),
